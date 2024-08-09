@@ -143,6 +143,7 @@ void populateTTModule(py::module &m) {
                             std::vector<unsigned> chipDescIndices,
                             std::vector<MlirAttribute> chipCapabilities,
                             std::vector<MlirAttribute> chipCoords,
+                            std::vector<MlirAttribute> chipCoreMappings,
                             std::vector<MlirAttribute> chipChannels) {
         std::vector<tt::ChipDescAttr> chipDescsUnwrapped;
         for (auto chipDesc : chipDescs) {
@@ -164,10 +165,17 @@ void populateTTModule(py::module &m) {
           chipChannelsUnwrapped.push_back(
               mlir::cast<tt::ChipChannelAttr>(unwrap(chipChannel)));
         }
+
+        std::vector<tt::ChipCoreMappingAttr> chipCoreMappingsUnwrapped;
+        for (auto chipCoreMapping : chipCoreMappings) {
+          chipCoreMappingsUnwrapped.push_back(
+              mlir::cast<tt::ChipCoreMappingAttr>(unwrap(chipCoreMapping)));
+        }
+
         return wrap(tt::SystemDescAttr::get(
             unwrap(ctx), chipDescsUnwrapped, chipDescIndices,
             chipCapabilitiesUnwrapped, chipCoordsUnwrapped,
-            chipChannelsUnwrapped));
+            chipCoreMappingsUnwrapped, chipChannelsUnwrapped));
       });
 
   py::class_<tt::MemorySpaceAttr>(m, "MemorySpaceAttr")

@@ -75,6 +75,27 @@ def TT_ChipCoordAttr : TT_Attr<"ChipCoord", "chip_coord"> {
   let assemblyFormat = "`<` $rack `,` $shelf `,` $y `,` $x `>`";
 }
 
+def TT_CoreMappingAttr : TT_Attr<"CoreMapping", "core_mapping"> {
+  let summary = "TT core_mapping attribute";
+  let description = [{
+    TT core_mapping attribute that defines logical and physical core mappings.
+  }];
+
+  let parameters = (ins ArrayRefParameter<"int64_t">:$logical, ArrayRefParameter<"int64_t">:$physical);
+  let assemblyFormat = "`{` custom<DimensionList>($logical) `:` custom<DimensionList>($physical) `}`";
+}
+
+def TT_ChipCoreMappingAttr : TT_Attr<"ChipCoreMapping", "chip_core_mapping"> {
+  let summary = "TT chip_core_mapping attribute";
+  let description = [{
+    TT chip_core_mapping attribute containing arrays of core mappings by core type.
+  }];
+
+  let parameters = (ins ArrayRefParameter<"CoreMappingAttr">:$worker, ArrayRefParameter<"CoreMappingAttr">:$dram, ArrayRefParameter<"CoreMappingAttr">:$eth);
+  let assemblyFormat = "`{` `worker` `=` `[` $worker `]` `,` `dram` `=` `[` $dram `]` `,` `eth` `=` `[` $eth `]` `}`";
+}
+
+
 def TT_ChipChannelAttr : TT_Attr<"ChipChannel", "chip_channel"> {
   let summary = "TT chip_channel attribute";
   let description = [{
@@ -98,8 +119,9 @@ def TT_SystemDescAttr : TT_Attr<"SystemDesc", "system_desc"> {
                         ArrayRefParameter<"unsigned">:$chipDescIndices,
                         ArrayRefParameter<"ChipCapabilityAttr">:$chipCapabilities,
                         ArrayRefParameter<"ChipCoordAttr">:$chipCoords,
+                        ArrayRefParameter<"ChipCoreMappingAttr">:$chipCoreMappings,
                         OptionalArrayRefParameter<"ChipChannelAttr">:$chipChannels);
-  let assemblyFormat = "`<` `[` $chipDescs `]` `,` `[` $chipDescIndices `]` `,` `[` $chipCapabilities `]` `,` `[` $chipCoords `]` (`,` `[` $chipChannels^ `]`)? `>`";
+  let assemblyFormat = "`<` `[` $chipDescs `]` `,` `[` $chipDescIndices `]` `,` `[` $chipCapabilities `]` `,` `[` $chipCoords `]` `,` `[` $chipCoreMappings `]` (`,` `[` $chipChannels^ `]`)? `>`";
 
   let extraClassDeclaration = [{
     static tt::SystemDescAttr getDefault(MLIRContext *context);

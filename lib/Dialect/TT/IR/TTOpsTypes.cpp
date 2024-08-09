@@ -50,6 +50,20 @@ mlir::tt::SystemDescAttr::getDefault(MLIRContext *context) {
       {
           tt::ChipCoordAttr::get(context, 0, 0, 0, 0),
       },
+      // Chip Core Mappings (Worker, DRAM, Eth)
+      {
+          tt::ChipCoreMappingAttr::get(
+              context,
+              {
+                  tt::CoreMappingAttr::get(context, {0, 0}, {0, 0}),
+              },
+              {
+                  tt::CoreMappingAttr::get(context, {0, 0}, {0, 0}),
+              },
+              {
+                  tt::CoreMappingAttr::get(context, {0, 0}, {0, 0}),
+              }),
+      },
       // Chip Channel Connections
       {});
 }
@@ -73,6 +87,8 @@ mlir::tt::SystemDescAttr::getFromPath(MLIRContext *context, std::string &path) {
       binary_system_desc->chip_desc_indices();
   auto const *chip_capabilities = binary_system_desc->chip_capabilities();
   auto const *binary_chip_coords = binary_system_desc->chip_coords();
+  auto const *binary_chip_core_mappings =
+      binary_system_desc->chip_core_mappings();
 
   // Acquire chip descs
   std::vector<tt::ChipDescAttr> chip_desc_list;
@@ -121,10 +137,46 @@ mlir::tt::SystemDescAttr::getFromPath(MLIRContext *context, std::string &path) {
     chip_coordinate_list.push_back(chip_coordinate_attr);
   }
 
+  // Acquire worker,dram,eth core mappings. First create a vector of
+  // CoreMappingAttr to store the logical-physical pairs for each core type,
+  // then create a ChipCoreMappingAttr using the list of CoreMappingAttr objects
+  std::vector<tt::ChipCoreMappingAttr> chip_core_mappings_list;
+  for (auto element : *binary_chip_core_mappings) {
+    std::vector<tt::CoreMappingAttr> worker_core_mapping_attrs;
+    std::vector<tt::CoreMappingAttr> dram_core_mapping_attrs;
+    std::vector<tt::CoreMappingAttr> eth_core_mapping_attrs;
+
+    for (auto core_mapping : *element->worker()) {
+      auto core_mapping_attr = tt::CoreMappingAttr::get(
+          context, {core_mapping->logical().y(), core_mapping->logical().x()},
+          {core_mapping->physical().y(), core_mapping->physical().x()});
+      worker_core_mapping_attrs.push_back(core_mapping_attr);
+    }
+
+    for (auto core_mapping : *element->dram()) {
+      auto core_mapping_attr = tt::CoreMappingAttr::get(
+          context, {core_mapping->logical().y(), core_mapping->logical().x()},
+          {core_mapping->physical().y(), core_mapping->physical().x()});
+      dram_core_mapping_attrs.push_back(core_mapping_attr);
+    }
+
+    for (auto core_mapping : *element->eth()) {
+      auto core_mapping_attr = tt::CoreMappingAttr::get(
+          context, {core_mapping->logical().y(), core_mapping->logical().x()},
+          {core_mapping->physical().y(), core_mapping->physical().x()});
+      eth_core_mapping_attrs.push_back(core_mapping_attr);
+    }
+
+    auto chip_core_mapping_attr = tt::ChipCoreMappingAttr::get(
+        context, worker_core_mapping_attrs, dram_core_mapping_attrs,
+        eth_core_mapping_attrs);
+    chip_core_mappings_list.push_back(chip_core_mapping_attr);
+  }
+
   // Generate system desc attribute
-  auto system_desc_attr =
-      tt::SystemDescAttr::get(context, chip_desc_list, chip_indices_list,
-                              chip_capabilities_list, chip_coordinate_list, {});
+  auto system_desc_attr = tt::SystemDescAttr::get(
+      context, chip_desc_list, chip_indices_list, chip_capabilities_list,
+      chip_coordinate_list, chip_core_mappings_list, {});
 
   return system_desc_attr;
 }

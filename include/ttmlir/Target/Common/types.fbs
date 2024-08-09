@@ -117,11 +117,23 @@ struct ChipChannel {
   ethernet_core_coord1: Dim2d;
 }
 
+struct CoreMapping {
+  logical: Dim2d;
+  physical: Dim2d;
+}
+
+table ChipCoreMapping {
+  worker: [CoreMapping];
+  eth: [CoreMapping];
+  dram: [CoreMapping];
+}
+
 table SystemDesc {
   chip_descs: [ChipDesc];
   chip_desc_indices: [uint32];
   chip_capabilities: [ChipCapability];
   chip_coords: [ChipCoord];
+  chip_core_mappings: [ChipCoreMapping];
   chip_channels: [ChipChannel];
 }
 

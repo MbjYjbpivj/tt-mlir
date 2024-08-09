@@ -147,7 +147,31 @@ inline ::tt::target::ChipChannel toFlatbuffer(FlatbufferObjectCache &cache,
 inline ::tt::target::Dim2d toFlatbuffer(FlatbufferObjectCache &cache,
                                         GridAttr arch) {
   assert(arch.getShape().size() == 2 && "expected a 2D grid");
-  return ::tt::target::Dim2d(arch.getShape()[0], arch.getShape()[1]);
+  return ::tt::target::Dim2d(
+      arch.getShape()[0],
+      arch.getShape()[1]); // FIXME, right order? Supposed to be Y,X
+}
+
+inline flatbuffers::Offset<::tt::target::ChipCoreMapping>
+toFlatbuffer(FlatbufferObjectCache &cache,
+             ChipCoreMappingAttr chipCoreMapping) {
+
+  std::vector<::tt::target::CoreMapping> coreMappingVector;
+
+  // Convert each CoreMappingAttr to a CoreMapping struct
+  for (auto coreMapping : chipCoreMapping.getWorker()) {
+    coreMappingVector.push_back(::tt::target::CoreMapping(
+        ::tt::target::Dim2d(coreMapping.getLogical()[0],
+                            coreMapping.getLogical()[1]),
+        ::tt::target::Dim2d(coreMapping.getPhysical()[0],
+                            coreMapping.getPhysical()[1])));
+  }
+
+  // Create a Flatbuffer vector of CoreMapping structs
+  auto coreMappings = cache.fbb->CreateVectorOfStructs(coreMappingVector);
+
+  // Create and return the ChipCoreMapping Flatbuffer object
+  return ::tt::target::CreateChipCoreMapping(*cache.fbb, coreMappings);
 }
 
 template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, int> = 0>
@@ -210,10 +234,11 @@ toFlatbuffer(FlatbufferObjectCache &cache, SystemDescAttr systemDesc) {
   auto chipDescIndices = toFlatbuffer(cache, systemDesc.getChipDescIndices());
   auto chipCapabilities = toFlatbuffer(cache, systemDesc.getChipCapabilities());
   auto chipCoords = toFlatbuffer(cache, systemDesc.getChipCoords());
+  auto chipCoreMappings = toFlatbuffer(cache, systemDesc.getChipCoreMappings());
   auto chipChannels = toFlatbuffer(cache, systemDesc.getChipChannels());
   return ::tt::target::CreateSystemDesc(*cache.fbb, chipDescs, chipDescIndices,
                                         chipCapabilities, chipCoords,
-                                        chipChannels);
+                                        chipCoreMappings, chipChannels);
 }
 
 inline std::vector<::tt::target::Dim2dRange>
