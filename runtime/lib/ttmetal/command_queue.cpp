@@ -134,6 +134,14 @@ void CQExecutor::execute(::tt::target::metal::Command const *command) {
 
 static void writeFile(std::string const &fileName, char const *data,
                       std::size_t size) {
+#define DEBUG 0
+#if defined(DEBUG) && DEBUG == 1
+  static const char *inplaceEditKernels =
+      std::getenv("TT_RUNTIME_INPLACE_EDIT_KERNELS");
+  if (inplaceEditKernels && std::string(inplaceEditKernels) == "1") {
+    return;
+  }
+#endif
   std::ofstream file(fileName);
   file.write(data, size);
   file.close();
@@ -185,11 +193,11 @@ static ::tt::tt_metal::CircularBufferConfig createCircularBufferConfig(
       cbRef->desc()->memory_desc()->size() * cbRef->desc()->num_buffers();
   ::tt::DataFormat dataFormat =
       toDataFormat(cbRef->desc()->memory_desc()->data_type());
-  assert(cbRef->associated_tensor_global_id());
+  assert(cbRef->tensor_ref());
+  assert(cbRef->tensor_ref()->address() == cbRef->address());
   return CircularBufferConfig(totalSize, {{cbRef->desc()->port(), dataFormat}},
-                              *buffers.at(cbRef->associated_tensor_global_id()))
-      .set_page_size(cbRef->desc()->port(),
-                     cbRef->desc()->memory_desc()->size());
+                              *buffers.at(cbRef->tensor_ref()->global_id()))
+      .set_page_size(cbRef->desc()->port(), cbRef->desc()->page_size());
 }
 
 void CQExecutor::execute(

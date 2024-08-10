@@ -184,7 +184,8 @@ public:
     assert(device);
     tt::SystemDescAttr systemDesc = op.getSystemDesc();
     assert(systemDesc);
-    auto addressAlignment = systemDesc.getAddressAlignBytes(inputLayout.getMemorySpace());
+    auto addressAlignment =
+        systemDesc.getAddressAlignBytes(inputLayout.getMemorySpace());
     assert(inputLayout.getPhysicalShape(inputTy.getShape()) ==
                outputLayout.getPhysicalShape(outputTy.getShape()) &&
            "Physical shapes must match for now");
@@ -264,14 +265,17 @@ public:
     auto outputTy = mlir::cast<RankedTensorType>(op.getType());
     auto inputLayout = mlir::cast<tt::LayoutAttr>(inputTy.getEncoding());
     auto outputLayout = mlir::cast<tt::LayoutAttr>(outputTy.getEncoding());
+    bool shouldTilize = not inputLayout.isTiled() && outputLayout.isTiled();
+    bool shouldUntilize = inputLayout.isTiled() && not outputLayout.isTiled();
+    assert(shouldTilize ^ shouldUntilize);
     assert(inputLayout.getGrid() == outputLayout.getGrid());
 
-    auto tensixAttr =
-        rewriter.getAttr<ttkernel::ThreadTypeAttr>(ttkernel::ThreadType::Tensix);
+    auto tensixAttr = rewriter.getAttr<ttkernel::ThreadTypeAttr>(
+        ttkernel::ThreadType::Tensix);
     SmallVector<Attribute> threadTypes = {tensixAttr};
     SmallVector<Attribute> operand_cb_port_mapping = {
         rewriter.getI64IntegerAttr(0),
-        rewriter.getI64IntegerAttr(1),
+        rewriter.getI64IntegerAttr(16),
     };
 
     SmallVector<Attribute> coreRanges = {
@@ -289,16 +293,16 @@ public:
     std::int64_t outputBaseAddress = lookupAddress(op.getOutput());
     Block *tensixBlock = rewriter.createBlock(&metalDispatch.getRegion(0));
     OpBuilder tensixBuilder(tensixBlock, tensixBlock->begin());
+    uint64_t pageSize = inputLayout.isTiled()
+                            ? inputLayout.getElementSizeBytes()
+                            : outputLayout.getElementSizeBytes();
     Type inputCBTy = rewriter.getType<ttkernel::CBType>(
-        inputBaseAddress, 0, mlir::cast<MemRefType>(inputLayout.getMemref()));
+        inputBaseAddress, 0, mlir::cast<MemRefType>(inputLayout.getMemref()), pageSize);
     Type outputCBTy = rewriter.getType<ttkernel::CBType>(
-        outputBaseAddress, 1, mlir::cast<MemRefType>(outputLayout.getMemref()));
+        outputBaseAddress, 16, mlir::cast<MemRefType>(outputLayout.getMemref()),
+        pageSize);
     tensixBlock->addArgument(inputCBTy, op.getLoc());
     tensixBlock->addArgument(outputCBTy, op.getLoc());
-
-    bool shouldTilize = not inputLayout.isTiled() && outputLayout.isTiled();
-    bool shouldUntilize = inputLayout.isTiled() && not outputLayout.isTiled();
-    assert(shouldTilize ^ shouldUntilize);
 
     int shardTileVolume = 1;
     for (auto dim : (shouldTilize ? outputLayout.getMemref().getShape()
@@ -306,9 +310,6 @@ public:
       shardTileVolume *= dim;
     }
 
-    auto one = tensixBuilder.create<arith::ConstantOp>(
-        op.getLoc(), tensixBuilder.getI32Type(),
-        tensixBuilder.getI32IntegerAttr(1));
     auto numTiles = tensixBuilder.create<arith::ConstantOp>(
         op.getLoc(), tensixBuilder.getI32Type(),
         tensixBuilder.getI32IntegerAttr(shardTileVolume));
@@ -323,13 +324,6 @@ public:
           tensixBlock->getArgument(1));
     }
 
-    // tensixBuilder.create<ttkernel::CBPushBackOp>(
-    //     op.getLoc(), tensixBlock->getArgument(0), one);
-    // tensixBuilder.create<ttkernel::CBWaitFrontOp>(
-    //     op.getLoc(), tensixBlock->getArgument(0), one);
-    tensixBuilder.create<ttkernel::CBReserveBackOp>(
-        op.getLoc(), tensixBlock->getArgument(1), one);
-
     if (shouldTilize) {
       tensixBuilder.create<ttkernel::TilizeBlockOp>(
           op.getLoc(), tensixBlock->getArgument(0), numTiles,
@@ -340,12 +334,11 @@ public:
           tensixBlock->getArgument(1));
     }
 
-    tensixBuilder.create<ttkernel::CBPushBackOp>(
-        op.getLoc(), tensixBlock->getArgument(1), one);
-    // tensixBuilder.create<ttkernel::CBPopFrontOp>(
-    //     op.getLoc(), tensixBlock->getArgument(0), one);
     tensixBuilder.create<ttkernel::ReturnOp>(op.getLoc());
-    return failure();
+
+    rewriter.replaceOp(op, metalDispatch);
+
+    return success();
   }
 
   LogicalResult matchAndRewrite(ttir::ToLayoutOp op,

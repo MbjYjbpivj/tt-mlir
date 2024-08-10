@@ -137,7 +137,8 @@ unsigned SystemDescAttr::getAddressAlignBytes(unsigned chipIndex) const {
   });
 }
 
-unsigned SystemDescAttr::getAddressAlignBytes(MemorySpace memorySpace, unsigned chipIndex) const {
+unsigned SystemDescAttr::getAddressAlignBytes(MemorySpace memorySpace,
+                                              unsigned chipIndex) const {
   switch (memorySpace) {
   case MemorySpace::DeviceL1:
     return getNocL1AddressAlignBytes(chipIndex);

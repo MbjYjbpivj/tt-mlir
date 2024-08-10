@@ -80,6 +80,14 @@ struct CQBuilder {
                                   ::tt::target::Dim2d(size[0], size[1]));
 }
 
+::flatbuffers::Offset<::tt::target::CBDesc>
+cbTypeToFlatbuffer(FlatbufferObjectCache &cache, ttkernel::CBType cbType) {
+  uint64_t numBuffers = 1; // Hard code to 1 for now
+  auto memref = cache.getOrCreate(cbType.getMemref(), memrefAttrToFlatbuffer);
+  return ::tt::target::CreateCBDesc(*cache.fbb, cbType.getPort(), memref,
+                                    cbType.getPageSize(), numBuffers);
+}
+
 class TTMetalSerializeToBinary
     : public impl::TTMetalSerializeToBinaryBase<TTMetalSerializeToBinary> {
 public:
@@ -163,6 +171,15 @@ public:
                 toFlatbuffer(mlir::cast<CoreRangeAttr>(
                     dispatchOp.getCoreRanges()[region.getRegionNumber()]))};
             std::vector<::flatbuffers::Offset<::tt::target::CBRef>> cbs;
+            for (auto arg : region.getArguments()) {
+              assert(arg.getArgNumber() < operands.size());
+              auto cbType = mlir::cast<ttkernel::CBType>(arg.getType());
+              auto cbDesc = cache.getOrCreate(cbType, cbTypeToFlatbuffer);
+              auto tensorRef = operands[arg.getArgNumber()];
+              cbs.push_back(
+                  ::tt::target::CreateCBRef(fbb, cache.global_id++, tensorRef,
+                                            cbType.getAddress(), cbDesc));
+            }
             kernels.push_back(::tt::target::metal::CreateKernelDescDirect(
                 fbb, ::tt::target::metal::Kernel::KernelSource,
                 ::tt::target::metal::CreateKernelSourceDirect(
