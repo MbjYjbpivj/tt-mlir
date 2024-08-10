@@ -90,6 +90,9 @@ public:
     } else if constexpr (std::is_same<TTIROpTy, ttir::ReluOp>::value) {
       kernelName = "relu";
       kernelKind = "eltwise";
+    } else if constexpr (std::is_same<TTIROpTy, ttir::DivOp>::value) {
+      kernelName = "div";
+      kernelKind = "eltwise";
     } else {
       return rewriter.notifyMatchFailure(op,
                                          "Unsupported Tosa operation for TTIR");
@@ -240,12 +243,13 @@ public:
   using impl::TTIRGenericBase<TTIRGeneric>::TTIRGenericBase;
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    patterns.add<TTIRLinalgGenericRewriter, TTIRKernelGenericRewriter,
-                 TTIRNamedToKernelRewriter<AddOp>,
-                 TTIRNamedToKernelRewriter<MultiplyOp>,
-                 TTIRNamedToKernelRewriter<SubtractOp>,
-                 TTIRNamedToKernelRewriter<GreaterEqualOp>,
-                 TTIRNamedToKernelRewriter<ReluOp>>(&getContext());
+    patterns.add<
+        TTIRLinalgGenericRewriter, TTIRKernelGenericRewriter,
+        TTIRNamedToKernelRewriter<AddOp>, TTIRNamedToKernelRewriter<MultiplyOp>,
+        TTIRNamedToKernelRewriter<SubtractOp>,
+        TTIRNamedToKernelRewriter<GreaterEqualOp>,
+        TTIRNamedToKernelRewriter<DivOp>, TTIRNamedToKernelRewriter<ReluOp>>(
+        &getContext());
     FrozenRewritePatternSet patternSet(std::move(patterns));
     if (failed(applyPatternsAndFoldGreedily(getOperation(), patternSet))) {
       signalPassFailure();
@@ -536,8 +540,8 @@ public:
           TTIRLayoutOperandsRewriter<MultiplyOp>,
           TTIRLayoutOperandsRewriter<SubtractOp>,
           TTIRLayoutOperandsRewriter<GreaterEqualOp>,
-          TTIRLayoutOperandsRewriter<ReluOp>, TTIRLayoutOperandsRewriter<SumOp>,
-          TTIRLayoutOperandsRewriter<MeanOp>,
+          TTIRLayoutOperandsRewriter<DivOp>, TTIRLayoutOperandsRewriter<ReluOp>,
+          TTIRLayoutOperandsRewriter<SumOp>, TTIRLayoutOperandsRewriter<MeanOp>,
           TTIRLayoutOperandsRewriter<SoftmaxOp>,
           TTIRLayoutOperandsRewriter<TransposeOp>,
           TTIRLayoutOperandsRewriter<MatmulOp>, TTIRLayoutFuncReturnRewriter>(
