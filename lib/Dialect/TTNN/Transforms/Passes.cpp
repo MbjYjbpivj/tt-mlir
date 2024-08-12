@@ -27,6 +27,9 @@
 #include "ttmlir/Dialect/TTNN/IR/TTNNOps.h"
 #include "ttmlir/Dialect/TTNN/IR/TTNNOpsTypes.h"
 #include "ttmlir/Dialect/TTNN/Transforms/Passes.h"
+#include <cstdint>
+#include <llvm/ADT/SmallVector.h>
+#include <mlir/IR/Attributes.h>
 
 namespace mlir::tt::ttnn {
 
@@ -71,7 +74,7 @@ public:
 
 // Rewrites `ttnn.add` or `ttnn.multiply` call to `ttnn.kernel`.
 template <typename TTNNOpType>
-class TTNNNamedToKernelRewriter : public OpRewritePattern<TTNNOpType> {
+class TTNNNamedTTNNOpToKernelOpRewriter : public OpRewritePattern<TTNNOpType> {
 public:
   using OpRewritePattern<TTNNOpType>::OpRewritePattern;
 
@@ -103,131 +106,116 @@ public:
   }
 };
 
-class TTNNKernelGenericRewriter : public OpRewritePattern<KernelOp> {
+class TTNNKernelOpToGenericOpRewriter : public OpRewritePattern<KernelOp> {
+private:
+  SmallVector<Attribute>
+  create_circular_buffer_attributes(PatternRewriter &rewriter,
+                                    CoreRangeAttr &core_range) const {
+    auto data_format = DataType::BFloat16;
+    auto tile = rewriter.getAttr<TileType>(32, 32, data_format);
+    auto page_size = tile.getSizeBytes();
+    auto total_size = 2 * page_size;
+
+    auto in0_circular_buffer_attributes =
+        rewriter.getAttr<CircularBufferAttributesAttr>(
+            CB::c_in0, core_range, total_size, page_size, data_format);
+
+    auto in1_circular_buffer_attributes =
+        rewriter.getAttr<CircularBufferAttributesAttr>(
+            CB::c_in1, core_range, total_size, page_size, data_format);
+
+    auto out0_circular_buffer_attributes =
+        rewriter.getAttr<CircularBufferAttributesAttr>(
+            CB::c_out0, core_range, total_size, page_size, data_format);
+
+    return {in0_circular_buffer_attributes, in1_circular_buffer_attributes,
+            out0_circular_buffer_attributes};
+  }
+
+  SmallVector<Attribute>
+  create_data_movement_attributes(PatternRewriter &rewriter,
+                                  CoreRangeAttr &core_range) const {
+    const char *reader_kernel_path =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/"
+        "dataflow/reader_binary_interleaved_start_id.cpp";
+
+    // Assuming interleaved mem layout where inputs are in DRAM.
+    auto src0_is_dram = true;
+    auto src1_is_dram = true;
+    SmallVector<uint32_t> reader_compile_time_args = {src0_is_dram,
+                                                      src1_is_dram};
+
+    auto reader_config = rewriter.getAttr<DataMovementConfigAttr>(
+        DataMovementType::Reader, reader_compile_time_args);
+
+    auto reader_attributes = rewriter.getAttr<DataMovementAttributesAttr>(
+        core_range, rewriter.getAttr<StringAttr>(reader_kernel_path),
+        reader_config);
+
+    const char *writer_kernel_path =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp";
+
+    // Assuming interleaved mem layout where outputs are in DRAM.
+    auto dst_is_dram = true;
+    SmallVector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CB::c_out0), dst_is_dram};
+
+    auto writer_config = rewriter.getAttr<DataMovementConfigAttr>(
+        DataMovementType::Reader, reader_compile_time_args);
+
+    auto writer_attributes = rewriter.getAttr<DataMovementAttributesAttr>(
+        core_range, rewriter.getAttr<StringAttr>(writer_kernel_path),
+        writer_config);
+
+    return {reader_attributes, writer_attributes};
+  }
+
+  mlir::tt::GridAttr get_grid(PatternRewriter &rewriter) const {
+    return GridAttr::get(rewriter.getContext(), {6, 6});
+  }
+
 public:
   using OpRewritePattern<KernelOp>::OpRewritePattern;
-
-  static bool sameRank(mlir::OperandRange operands) {
-    if (operands.empty()) {
-      return false;
-    }
-    auto rank = mlir::cast<RankedTensorType>(operands[0].getType()).getRank();
-    for (auto operand : operands) {
-      if (mlir::cast<RankedTensorType>(operand.getType()).getRank() != rank) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  static std::pair<ArrayAttr, ArrayAttr>
-  createEltwiseIndexingMaps(PatternRewriter &rewriter,
-                            mlir::OperandRange operands) {
-    assert(sameRank(operands) &&
-           "For now all operands must have the same rank");
-    auto rank = mlir::cast<RankedTensorType>(operands[0].getType()).getRank();
-    SmallVector<AffineMap> indexingMaps(operands.size(),
-                                        rewriter.getMultiDimIdentityMap(rank));
-    SmallVector<Attribute> iteratorTypes(
-        rank, rewriter.getAttr<IteratorTypeAttr>(IteratorType::Parallel));
-    return {rewriter.getAffineMapArrayAttr(indexingMaps),
-            rewriter.getArrayAttr(iteratorTypes)};
-  }
-
-  static std::pair<ArrayAttr, ArrayAttr>
-  createMatmulIndexingMaps(PatternRewriter &rewriter,
-                           mlir::OperandRange operands) {
-    assert(sameRank(operands) &&
-           "For now all operands must have the same rank");
-    auto rank = mlir::cast<RankedTensorType>(operands[0].getType()).getRank();
-    assert(rank >= 2 && "Matmul requires rank >= 2");
-    auto rank_plus_inner_dim = rank + 1;
-
-    // (d0, d1, d2, d3) -> (d0, d1, d2, d3)
-    // lhs (d0, d1, d2, d3) -> (d0, d1, d3) drop d2
-    // rhs (d0, d1, d2, d3) -> (d0, d3, d2) drop d1 and swap d2 and d3
-    // out (d0, d1, d2, d3) -> (d0, d1, d2) drop d3
-    auto id = rewriter.getMultiDimIdentityMap(rank_plus_inner_dim);
-    auto lhs = id.dropResult(rank_plus_inner_dim - 2);
-    auto rhs = id.dropResult(rank_plus_inner_dim - 3);
-    auto rhs_outer = rhs.getResult(rank - 2);
-    rhs = rhs.insertResult(rhs_outer, rank);
-    rhs = rhs.dropResult(rank - 2);
-    auto out = id.dropResult(rank_plus_inner_dim - 1);
-
-    SmallVector<AffineMap> indexingMaps = {lhs, rhs, out};
-    SmallVector<Attribute> iteratorTypes(
-        rank, rewriter.getAttr<IteratorTypeAttr>(IteratorType::Parallel));
-    iteratorTypes.push_back(
-        rewriter.getAttr<IteratorTypeAttr>(IteratorType::Systolic));
-    return {rewriter.getAffineMapArrayAttr(indexingMaps),
-            rewriter.getArrayAttr(iteratorTypes)};
-  }
-
-  static std::pair<ArrayAttr, ArrayAttr>
-  createIndexingMaps(PatternRewriter &rewriter, StringRef kind,
-                     mlir::OperandRange operands) {
-    if (kind == "eltwise") {
-      return createEltwiseIndexingMaps(rewriter, operands);
-    }
-    if (kind == "matmul") {
-      return createMatmulIndexingMaps(rewriter, operands);
-    }
-    llvm_unreachable("Unsupported kernel kind");
-  }
-
-  static ArrayAttr createOperandConstraints(PatternRewriter &rewriter,
-                                            StringRef kind,
-                                            mlir::OperandRange operands) {
-    auto numOperands = operands.size();
-    if (kind == "eltwise") {
-      return rewriter.getArrayAttr(SmallVector<Attribute>(
-          numOperands, rewriter.getAttr<OperandConstraintAttr>(
-                           OperandConstraint::AnyDevice)));
-    }
-    if (kind == "matmul") {
-      return rewriter.getArrayAttr(SmallVector<Attribute>(
-          numOperands, rewriter.getAttr<OperandConstraintAttr>(
-                           OperandConstraint::AnyDeviceTile)));
-    }
-    llvm_unreachable("Unsupported kernel kind");
-  }
 
   LogicalResult matchAndRewrite(KernelOp op,
                                 PatternRewriter &rewriter) const final {
     // Test if this generic op has already been lowered, todo find a better way
     if (op.getOperation()->getParentOp()->getName() ==
-        OperationName("ttnn.generic", rewriter.getContext())) {
+        OperationName(GenericOp::getOperationName(), rewriter.getContext())) {
       return failure();
     }
 
-    // Create a dispatch op
-    auto [indexingMaps, iteratorTypes] =
-        createIndexingMaps(rewriter, op.getKind(), op.getOperands());
-    auto constraints =
-        createOperandConstraints(rewriter, op.getKind(), op.getOperands());
-    auto dispatch = rewriter.create<ttnn::GenericOp>(
-        op.getLoc(), op.getResults().getTypes(), op.getInputs(),
-        op.getOutputs(), rewriter.getAttr<GridAttr>(), indexingMaps,
-        iteratorTypes, constraints);
+    GridAttr grid = get_grid(rewriter);
+    // Core range over the entire specified grid.
+    auto all_cores = rewriter.getAttr<CoreRangeAttr>(grid);
 
-    // Create a new basic block for the dispatch op and create block arguments
-    Block *block = rewriter.createBlock(&dispatch.getRegion());
-    SmallVector<Location> blockArgumentLocs(dispatch.getOperands().size(),
-                                            dispatch.getLoc());
-    block->addArguments(TypeRange(dispatch.getOperandTypes()),
+    auto circular_buffer_attributes =
+        create_circular_buffer_attributes(rewriter, all_cores);
+
+    auto generic_op = rewriter.create<GenericOp>(
+        op.getLoc(), op.getResults().getTypes(), op.getInputs(),
+        op.getOutputs(), grid,
+        rewriter.getArrayAttr(circular_buffer_attributes));
+
+    // Create a new basic block for the generic_op op and create block arguments
+    Block *block = rewriter.createBlock(&generic_op.getRegion());
+
+    SmallVector<Location> blockArgumentLocs(generic_op.getOperands().size(),
+                                            generic_op.getLoc());
+
+    block->addArguments(TypeRange(generic_op.getOperandTypes()),
                         blockArgumentLocs);
 
     // Update the operands of the original op to use the block arguments
     op.getOperation()->setOperands(block->getArguments());
 
-    // Move the original op into the dispatch block
+    // Move the original op into the generic_op block
     Operation *operation = op.getOperation()->clone();
     block->push_back(operation);
     rewriter.setInsertionPoint(block, block->end());
-    rewriter.create<ttnn::YieldOp>(dispatch.getLoc(),
+    rewriter.create<ttnn::YieldOp>(generic_op.getLoc(),
                                    ValueRange({operation->getResult(0)}));
-    rewriter.replaceOp(op, dispatch);
+    rewriter.replaceOp(op, generic_op);
     return success();
   }
 };
@@ -237,13 +225,13 @@ public:
   using impl::TTNNGenericBase<TTNNGeneric>::TTNNGenericBase;
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    
-    patterns.add<TTNNKernelGenericRewriter,
-                 TTNNNamedToKernelRewriter<AddOp>,
-                 TTNNNamedToKernelRewriter<MultiplyOp>>(&getContext());
-    
+
+    patterns.add<TTNNNamedTTNNOpToKernelOpRewriter<AddOp>,
+                 TTNNNamedTTNNOpToKernelOpRewriter<MultiplyOp>,
+                 TTNNKernelOpToGenericOpRewriter>(&getContext());
+
     FrozenRewritePatternSet patternSet(std::move(patterns));
-    
+
     if (failed(applyPatternsAndFoldGreedily(getOperation(), patternSet))) {
       signalPassFailure();
     }
