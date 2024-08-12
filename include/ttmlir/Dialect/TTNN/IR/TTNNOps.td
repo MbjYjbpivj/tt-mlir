@@ -5,15 +5,16 @@
 #ifndef TTMLIR_TTMLIR_DIALECT_TTNN_TTNNOPS_TD
 #define TTMLIR_TTMLIR_DIALECT_TTNN_TTNNOPS_TD
 
-include "ttmlir/Dialect/TT/IR/TTOpsTypes.td"
-include "ttmlir/Dialect/TTNN/IR/TTNNBase.td"
-include "ttmlir/Dialect/TTNN/IR/TTNNOpsTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/CommonTypeConstraints.td"
 include "mlir/IR/CommonAttrConstraints.td"
+
+include "ttmlir/Dialect/TT/IR/TTOpsTypes.td"
+include "ttmlir/Dialect/TTNN/IR/TTNNBase.td"
+include "ttmlir/Dialect/TTNN/IR/TTNNOpsTypes.td"
 
 def TTNN_OpenDeviceOp : TTNN_Op<"open_device"> {
     let summary = "Open Device op.";
@@ -206,27 +207,14 @@ def TTNN_GenericOp : TTNN_Op<"generic", [AttrSizedOperandSegments]> {
     let summary = "Generic op modelling any kind of user-written work a group of cores executes.";
 
     let description = [{
-      Generic op form where the key properties of the computation are specified as attributes.
-
-      It contains a region that hooks to a backend call which executes the described work.
-
-      ```mlir
-      %4 = "ttnn.generic"(%1, %2, %3) < { attributes-specifying-underlying-computation } > ({
-        ^bb0(%arg2: tensor<?xf32, #l1_layout>, %arg3: tensor<?xf32, #l1_layout>, %arg4: tensor<?xf32, #l1_layout>):
-          // Region body, would contain a backend hook to some computation that represents the work each core does.
-          // In ttnn terms it would pass the user-written compute and data movement kernels, as well as parameters for
-          // setting up entire ttnn execution flow (check out 
-          // https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html) to the backend hook.
-      }) : (tensor<?xf32, #l1_layout>, tensor<?xf32, #l1_layout>, tensor<?xf32, #l1_layout>) -> tensor<?xf32, #l1_layout>
-      ```
+      TODO
     }];
 
     let arguments = (ins Variadic<AnyRankedTensor>:$inputs,
                          Variadic<AnyRankedTensor>:$outputs,
                          TT_GridAttr:$grid,
-                         AffineMapArrayAttr:$indexing_maps,
-                         TT_IteratorTypeArrayAttr:$iterator_types,
-                         TT_OperandConstraintArrayAttr:$operand_constraints);
+                         TTNN_CircularBufferAttributesArrayAttr:$circular_buffer_attributes);
+                        //  TTNN_OperationAttributesAttr:$operation_attributes);
 
     let results = (outs Variadic<AnyRankedTensor>:$results);
     
