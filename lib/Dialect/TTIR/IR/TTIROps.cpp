@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
+
 #include "ttmlir/Dialect/TTIR/IR/TTIROps.h"
 #include "ttmlir/Dialect/TTIR/IR/TTIR.h"
 
@@ -27,6 +29,14 @@
     return emitOpError("Input and output shapes must be the same");
   }
   return success();
+}
+
+void mlir::tt::ttir::AddOp::buildGenericRegion(::mlir::OpBuilder &opBuilder,
+                                               ::mlir::Block *block) {
+  auto lhs = block->getArgument(0);
+  auto rhs = block->getArgument(1);
+  auto result = opBuilder.create<arith::AddFOp>(getLoc(), lhs, rhs);
+  opBuilder.create<ttir::YieldOp>(getLoc(), ValueRange({result}));
 }
 
 ::mlir::LogicalResult mlir::tt::ttir::SoftmaxOp::verify() {

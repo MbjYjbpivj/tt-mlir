@@ -24,7 +24,8 @@
 #include "ttmlir/Utils.h"
 
 namespace mlir::tt::ttir {
-#define GEN_PASS_DEF_TTIRGENERIC
+#define GEN_PASS_DEF_TTIRGENERICKERNEL
+#define GEN_PASS_DEF_TTIRGENERICELTWISE
 #define GEN_PASS_DEF_TTIRGENERICREGIONOPERANDSTOMEMREF
 #define GEN_PASS_DEF_TTIRLAYOUT
 #define GEN_PASS_DEF_TTIRALLOCATE
@@ -198,9 +199,7 @@ public:
 
   LogicalResult matchAndRewrite(KernelOp op,
                                 PatternRewriter &rewriter) const final {
-    // Test if this generic op has already been lowered, todo find a better way
-    if (op.getOperation()->getParentOp()->getName() ==
-        OperationName("ttir.generic", rewriter.getContext())) {
+    if (mlir::isa<GenericOp>(op.getOperation()->getParentOp())) {
       return failure();
     }
 
@@ -235,9 +234,9 @@ public:
   }
 };
 
-class TTIRGeneric : public impl::TTIRGenericBase<TTIRGeneric> {
+class TTIRGenericKernel : public impl::TTIRGenericKernelBase<TTIRGenericKernel> {
 public:
-  using impl::TTIRGenericBase<TTIRGeneric>::TTIRGenericBase;
+  using impl::TTIRGenericKernelBase<TTIRGenericKernel>::TTIRGenericKernelBase;
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<TTIRLinalgGenericRewriter, TTIRKernelGenericRewriter,
@@ -254,6 +253,63 @@ public:
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::tt::ttir::TTIRDialect>();
     registry.insert<mlir::tt::TTDialect>();
+  }
+};
+
+class TTIRGenericEltwiseRewriter
+    : public OpInterfaceRewritePattern<GenericRegionOp> {
+public:
+  using OpInterfaceRewritePattern<GenericRegionOp>::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(GenericRegionOp op,
+                                PatternRewriter &rewriter) const final {
+    if (mlir::isa<GenericOp>(op.getOperation()->getParentOp())) {
+      return failure();
+    }
+
+    auto dps = cast<DestinationStyleOpInterface>(op.getOperation());
+
+    // Create a dispatch op
+    auto [indexingMaps, iteratorTypes] = op.getIndexingMaps(rewriter);
+    auto constraints = rewriter.getArrayAttr(SmallVector<Attribute>(
+        op->getNumOperands(), rewriter.getAttr<OperandConstraintAttr>(
+                                  OperandConstraint::AnyDeviceTile)));
+    auto dispatch = rewriter.create<ttir::GenericOp>(
+        op.getLoc(), op->getResults().getTypes(), dps.getDpsInputs(),
+        dps.getDpsInits(), rewriter.getAttr<GridAttr>(), indexingMaps,
+        iteratorTypes, constraints);
+
+    // Create a new basic block for the dispatch op and create block arguments
+    Block *block = rewriter.createBlock(&dispatch.getRegion());
+    SmallVector<Location> blockArgumentLocs(dispatch.getOperands().size(),
+                                            dispatch.getLoc());
+    block->addArguments(TypeRange(dispatch.getOperandTypes()),
+                        blockArgumentLocs);
+
+    // Convert the original op into arith/math and into the dispatch block
+    OpBuilder blockBuilder = OpBuilder::atBlockEnd(block);
+    op.buildGenericRegion(blockBuilder, block);
+    rewriter.replaceOp(op, dispatch);
+    return success();
+  }
+};
+
+class TTIRGenericEltwise : public impl::TTIRGenericEltwiseBase<TTIRGenericEltwise> {
+public:
+  using impl::TTIRGenericEltwiseBase<
+      TTIRGenericEltwise>::TTIRGenericEltwiseBase;
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    patterns.add<TTIRGenericEltwiseRewriter>(&getContext());
+    FrozenRewritePatternSet patternSet(std::move(patterns));
+    if (failed(applyPatternsAndFoldGreedily(getOperation(), patternSet))) {
+      signalPassFailure();
+    }
+  }
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::tt::ttir::TTIRDialect>();
+    registry.insert<mlir::tt::TTDialect>();
+    registry.insert<mlir::arith::ArithDialect>();
   }
 };
 
